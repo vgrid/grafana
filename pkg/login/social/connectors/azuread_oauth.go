@@ -35,6 +35,7 @@ import (
 const (
 	forceUseGraphAPIKey = "force_use_graph_api" // #nosec G101 not a hardcoded credential
 	domainHintKey       = "domain_hint"
+	teamMappingKey      = "team_mapping"
 )
 
 var (
@@ -42,6 +43,7 @@ var (
 		forceUseGraphAPIKey:     {Type: Bool, DefaultValue: false},
 		allowedOrganizationsKey: {Type: String},
 		domainHintKey:           {Type: String},
+		teamMappingKey:          {Type: String},
 	}
 	errAzureADMissingGroups = &SocialError{"either the user does not have any group membership or the groups claim is missing from the token."}
 )

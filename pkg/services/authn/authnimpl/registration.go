@@ -27,6 +27,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginauth"
 	"github.com/grafana/grafana/pkg/services/quota"
 	"github.com/grafana/grafana/pkg/services/rendering"
+	"github.com/grafana/grafana/pkg/services/team"
 	tempuser "github.com/grafana/grafana/pkg/services/temp_user"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
@@ -46,6 +47,7 @@ func ProvideRegistration(
 	socialService social.Service, cache *remotecache.RemoteCache,
 	ldapService service.LDAP, settingsProvider setting.Provider,
 	tracer tracing.Tracer, tempUserService tempuser.Service, notificationService notifications.Service,
+	teamService team.Service, teamPermissionsService accesscontrol.TeamPermissionsService,
 	pluginAuth *pluginauth.Config,
 ) (Registration, error) {
 	logger := log.New("authn.registration")
@@ -123,6 +125,11 @@ func ProvideRegistration(
 	authnSvc.RegisterPostAuthHook(userSync.SyncLastSeenHook, 130)
 	authnSvc.RegisterPostAuthHook(sync.ProvideOAuthTokenSync(oauthTokenService, sessionService, socialService, tracer, features).SyncOauthTokenHook, 60)
 	authnSvc.RegisterPostAuthHook(userSync.FetchSyncedUserHook, 100)
+
+	// Sync team membership from the provider's external groups before
+	// FetchSyncedUserHook loads the user's teams and groups.
+	teamSync := sync.ProvideTeamSync(teamService, teamPermissionsService, socialService, tracer)
+	authnSvc.RegisterPostAuthHook(teamSync.SyncTeamsHook, 90)
 
 	// Surface external groups as the identity's groups under the flag (see hook doc).
 	// After FetchSyncedUserHook (100) so it overrides stored team memberships.

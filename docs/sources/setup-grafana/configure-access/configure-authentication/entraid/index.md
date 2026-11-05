@@ -425,6 +425,24 @@ You can reference Entra ID groups by group object ID, like `8bab1c86-8fba-33e5-2
 
 To learn more, refer to the [Team Sync](https://grafana.com/docs/grafana/<GRAFANA_VERSION>/setup-grafana/configure-access/configure-team-sync) documentation.
 
+### Configure team mapping in Grafana OSS
+
+This vGRID fork of Grafana OSS can sync team membership from the groups claim at login without an additional Graph API credential. Create the teams first, then set `team_mapping` to a list of `<group-object-id>:<team-name>` entries:
+
+```ini
+[auth.azuread]
+# ...
+team_mapping = "8bab1c86-8fba-33e5-2089-1d1c80ec267d:Engineering", "1f2e3d4c-5b6a-7980-1a2b-3c4d5e6f7a8b:Platform"
+```
+
+At each login, Grafana adds the user to the mapped teams and removes externally managed memberships that no longer match. The mapping applies to the user's active organization. Manually added team memberships are left untouched. Sync failures are logged and don't block login.
+
+When the identity has no external groups, Grafana keeps existing memberships. This protects against missing group data, including Entra ID group overage and Graph API fallback failures. It also means that removing a user's final Entra ID group doesn't revoke their team memberships automatically.
+
+{{< admonition type="caution" >}}
+Grafana's external membership flag doesn't identify which provider created a membership. Don't combine this mapping with another team membership provisioner for the same users and organization: this sync can remove memberships created by that provisioner.
+{{< /admonition >}}
+
 ## Skip organization role sync
 
 If you don't want Entra ID authentication to sync user roles and organization membership and prevent the sync of org roles from Entra ID, set `skip_org_role_sync` to `true`. Use this if you want to manage the organization roles for your users from within Grafana or that your organization roles are synced from another provider.
@@ -466,6 +484,7 @@ The following table outlines the various Entra ID configuration options. You can
 | `skip_org_role_sync`            | No       | Yes                | Set to `true` to stop automatically syncing user roles. This will allow you to set organization roles for your users from within Grafana manually.                                                                                                                                                                                                                                                                                                                                              | `false`                                              |
 | `allowed_groups`                | No       | Yes                | List of comma- or space-separated groups. The user should be a member of at least one group to log in. If you configure `allowed_groups`, you must also configure Entra ID to include the `groups` claim following [Configure group membership claims on the Azure Portal](#configure-group-membership-claims-on-the-azure-portal).                                                                                                                                                             |                                                      |
 | `allowed_organizations`         | No       | Yes                | List of comma- or space-separated Azure tenant identifiers. The user should be a member of at least one tenant to log in.                                                                                                                                                                                                                                                                                                                                                                       |                                                      |
+| `team_mapping`                  | No       | No                 | List of comma- or space-separated `<Entra group object ID>:<Grafana team name>` entries. At login, Grafana adds the user to the mapped teams and removes memberships previously managed by this sync. Quote an entry that contains spaces.                                                                                                                                                                                                                                                      |                                                      |
 | `allowed_domains`               | No       | Yes                | List of comma- or space-separated domains. The user should belong to at least one domain to log in.                                                                                                                                                                                                                                                                                                                                                                                             |                                                      |
 | `domain_hint`                   | No       | Yes                | The realm of the user in a federated directory. This skips the email-based discovery process that the user goes through on the Entra ID sign-in page, for a slightly more streamlined user experience. More info [here](https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc#send-the-sign-in-request).                                                                                                                                                                  |                                                      |
 | `tls_skip_verify_insecure`      | No       | No                 | If set to `true`, the client accepts any certificate presented by the server and any host name in that certificate. _You should only use this for testing_, because this mode leaves SSL/TLS susceptible to man-in-the-middle attacks.                                                                                                                                                                                                                                                          | `false`                                              |
