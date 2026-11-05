@@ -1,0 +1,119 @@
+name: Publish vGRID Grafana to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version, for example 13.3.0-vgrid.1'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: vgrid-ghcr-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate version and prepare image metadata
+        id: image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-vgrid\.[0-9]+$ ]]; then
+            echo '::error::Version must have the form 13.3.0-vgrid.1.'
+            exit 1
+          fi
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build amd64 image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          target: final-alpine
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.name }}
+          build-args: |
+            GO_BUILD_TAGS=oss
+            WIRE_TAGS=oss
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_BRANCH=${{ github.ref_name }}
+            SOURCE_DATE_EPOCH=${{ steps.image.outputs.source_date_epoch }}
+          labels: |
+            org.opencontainers.image.title=vGRID Grafana
+            org.opencontainers.image.description=Grafana OSS with vGRID Entra ID team mapping
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+          cache-from: type=gha,scope=vgrid-grafana-amd64
+          cache-to: type=gha,mode=max,scope=vgrid-grafana-amd64
+
+      - name: Smoke test image
+        timeout-minutes: 6
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = amd64
+          docker run --detach --name grafana-smoke \
+            --publish 127.0.0.1:3000:3000 \
+            --env GF_PLUGINS_PREINSTALL_DISABLED=true \
+            --env GF_ANALYTICS_REPORTING_ENABLED=false \
+            "$IMAGE"
+          trap 'docker logs grafana-smoke; docker rm --force grafana-smoke' EXIT
+          for _ in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health | jq --exit-status '.database == "ok"' > /dev/null; then
+              exit 0
+            fi
+            if [[ "$(docker inspect --format '{{.State.Running}}' grafana-smoke)" != true ]]; then
+              echo '::error::Grafana exited before becoming healthy.'
+              exit 1
+            fi
+            sleep 5
+          done
+          echo '::error::Grafana did not become healthy within five minutes.'
+          exit 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: docker push "$IMAGE"
+
+      - name: Write publishing summary
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          {
+            echo '## Published vGRID Grafana'
+            printf '\nImage: %s\n' "$IMAGE"
+            printf '\nPlatform: linux/amd64\n'
+            printf '\nSource: %s\n' "$SOURCE_URL"
+            printf '\nPull with:\n\n    docker pull %s\n' "$IMAGE"
+          } >> "$GITHUB_STEP_SUMMARY"
